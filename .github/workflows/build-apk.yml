@@ -21,11 +21,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Show Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" || true
+          ls "$ANDROID_HOME/build-tools" || true
 
-      - name: Install SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" > /dev/null
+      - name: Ensure SDK platform 35
+        run: |
+          if [ ! -d "$ANDROID_HOME/platforms/android-35" ]; then
+            sdkmanager --install "platforms;android-35" || true
+          fi
+          if [ ! -d "$ANDROID_HOME/build-tools/35.0.0" ]; then
+            sdkmanager --install "build-tools;35.0.0" || true
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -33,7 +42,7 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk NEURA-AI.apk
@@ -52,5 +61,5 @@ jobs:
           name: NEURA app (Android APK)
           body: |
             Install: download NEURA-AI.apk below and tap it on your Android phone.
-            Android may ask to allow installing from this source - allow it once.
+            Android may ask once to allow installing from this source - allow it.
           files: NEURA-AI.apk
