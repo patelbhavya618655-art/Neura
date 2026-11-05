@@ -1,5 +1,5 @@
 /* NEURA service worker: offline shell + fast repeat loads */
-const CACHE = 'neura-v2';
+const CACHE = 'neura-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png',
   './icon-maskable-512.png', './apple-touch-icon.png', './icon-32.png', './favicon.svg', './favicon.ico'];
 
