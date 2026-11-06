@@ -794,7 +794,7 @@ function planPg(){const F=['Lighter, faster AI model','Short, quick replies','AI
 box=(m,t,l,on,sub,ext)=>'<div class="card" onclick="selPlan(\''+m+'\')" style="cursor:pointer;'+(on?'border:1px solid var(--ac)':'')+'"><b>'+t+(on?' \u00b7 Current plan':'')+'</b>'+(sub?'<div style="color:var(--ac);margin-top:4px">'+sub+'</div>':'')+'<p class="inf" style="white-space:pre-line">'+l.map(x=>'\u2022 '+x).join('\n')+'</p>'+(ext||'')+'</div>';
 const u_=usage(),L_=LIM.free,b2=(l,u,t)=>{const p=Math.min(100,u/t*100),c=p<60?'var(--ac)':p<85?'#e0a100':'#e5484d';return'<div class="ub"><div class="r"><b>'+l+'</b><span class="mu">'+u+' / '+t+' used</span></div><div class="tr"><i style="width:'+p+'%;background:'+c+'"></i></div><div class="mu" style="font-size:12px;margin-top:4px">'+Math.max(0,t-u)+' left</div></div>'},uc='<div class="card"><b>Today\'s usage</b><div class="mu" style="margin:4px 0 14px;font-size:13px">Free plan limits reset every day at 12:00 AM.</div>'+b2('Messages',u_.m,L_.m)+b2('Image attachments',u_.i,L_.i)+b2('File attachments',u_.f,L_.f)+b2('Image creations',u_.g,L_.g)+'</div>';
 let h='<div class="seg">'+tab('plans','Plans')+tab('coll','Unlock')+'</div>';
-if(plT=='plans')h+=(mode=='free'?uc:'')+'<div class="pgg">'+box('free','Free',F,mode=='free','')+box('pro','Pro',P,mode=='pro',on_?'Pro active until '+fmtE(ex):'Claim tokens to Unlock Pro Mode',mode=='pro'?effUI():'')+'</div>';
+if(plT=='plans')h+=subCard()+(mode=='free'?uc:'')+'<div class="pgg">'+box('free','Free',F,mode=='free','')+box('pro','Pro',P,mode=='pro',on_?'Pro active until '+fmtE(ex):'Claim tokens to Unlock Pro Mode',mode=='pro'?effUI():'')+'</div>';
 else h+='<div class="card" style="text-align:center"><div class="mu">Coins earned</div><div style="font-size:44px;font-weight:800;color:var(--ac)">'+co.c+'</div><div class="r s"><span>Today '+(co.d[dk(0)]||0)+'</span><span>Yesterday '+(co.d[dk(1)]||0)+'</span><span>Total '+co.e+'</span></div></div><div class="card"><div class="r"><b>Tokens</b><b>'+co.tok+'</b></div><p class="mu" style="margin:8px 0 12px">Earn '+(S('cm_dev')?'5 coins':'1 coin')+' for every message in Free mode. 10 coins = 1 token.</p><button class="pb" style="width:100%" onclick="convC()">Convert 10 Coins to 1 token</button></div>'+(on_?'<div class="card"><b>Pro is active</b><div class="mu" style="margin-top:4px">Expires on '+fmtE(ex)+'</div></div>':'')+TIERS.map((T,i)=>'<div class="card r"><div><b>Unlock Pro for '+T[2]+'</b><div class="mu">Give '+T[0]+' tokens</div></div><button class="pb" onclick="claimP('+i+')">Claim</button></div>').join('');
 pg('Plan & usage',h)}
 const ago=t=>{const m=(Date.now()-t)/6e4;return m<1?'Now':m<60?Math.floor(m)+' min ago':m<1440?Math.floor(m/60)+' hr ago':new Date(t).toLocaleDateString()};
@@ -870,6 +870,46 @@ if($('pg').classList.contains('on')&&tn=='INPUT'){const b=document.querySelector
 document.addEventListener('keydown',e=>{const v=$('ifv');if(e.key=='Escape'&&v&&v.style.display=='flex')imClose()});
 
 
+
+/* ===== Play Store subscriptions ===== */
+const BILL=(typeof window.NEURA_BILLING!=='undefined');
+const PLANS=[{id:'neura_pro_monthly',n:'Pro Monthly',p:'\u20b999 / month',d:30},
+             {id:'neura_pro_yearly',n:'Pro Yearly',p:'\u20b9799 / year',d:365}];
+function buyPlan(id){
+  if(!BILL)return toast('Subscriptions Play Store app mein available hain. NEURA ko Play Store se install karo.');
+  try{window.NEURA_BILLING.buy(id);toast('Opening Google Play...')}catch(e){toast('Billing start nahi ho payi.')}
+}
+function restoreBilling(){
+  if(!BILL)return toast('Restore sirf Play Store app mein hota hai.');
+  try{window.NEURA_BILLING.restore();toast('Checking your purchases...')}catch(e){}
+}
+function proGrant(days,note){
+  const base=Math.max(Date.now(),S('cm_pe')||0);
+  W('cm_pe',base+days*864e5);mode='pro';save();
+  toast(note||'Pro active. Thank you!');
+  try{mdPill()}catch(e){}
+  try{if($('pg').classList.contains('on'))planPg()}catch(e){}
+}
+window.onBillingResult=function(raw){
+  let r={};try{r=typeof raw=='string'?JSON.parse(raw):raw}catch(e){return}
+  if(r.state=='purchased'){
+    const d=/year/i.test(r.productId||'')?365:30;
+    proGrant(d,'Pro active! '+(d==365?'Yearly':'Monthly')+' plan chal raha hai.');
+  }else if(r.state=='pending'){toast('Payment pending hai. Approve hote hi Pro chalu ho jayega.')}
+  else if(r.state=='restored'){const d=/year/i.test(r.productId||'')?365:30;proGrant(d,'Purchase restore ho gaya.')}
+  else if(r.state=='none'){toast('Koi active subscription nahi mili.')}
+  else if(r.state=='error'){toast(r.message||'Purchase complete nahi hua.')}
+};
+function subCard(){
+  const active=proOn();
+  if(!BILL)return '<div class="card"><b>NEURA Pro</b><p class="inf" style="white-space:pre-line;margin-top:6px">Subscriptions are available in the Play Store app.\nInstall NEURA from Google Play to subscribe.</p></div>';
+  return '<div class="card"><b>NEURA Pro'+(active?' \u00b7 Active':'')+'</b>'
+   +'<div class="mu" style="margin:5px 0 12px;font-size:13px">ULTRA 4.5, NAXUS 7, image generation, unlimited messages and attachments.</div>'
+   +(active?'<div style="color:var(--ac);margin-bottom:10px">Active till '+fmtE(S('cm_pe')||Date.now())+'</div>':'')
+   +PLANS.map(p=>'<button class="pb g" style="width:100%;margin-bottom:8px" onclick="buyPlan(\''+p.id+'\')">'+p.n+' \u2014 '+p.p+'</button>').join('')
+   +'<button class="pb" style="width:100%" onclick="restoreBilling()">Restore purchases</button>'
+   +'<div class="mu" style="font-size:12px;margin-top:10px">Payment Google Play se hota hai. Kabhi bhi cancel kar sakte ho.</div></div>';
+}
 
 /* ===== Model picker (FLASH / ULTRA / NAXUS + effort) ===== */
 const MD=[{id:'flash',n:'FLASH 3.0',pro:0,m:'openai/gpt-oss-20b',d:'Fast and light for everyday chats'},
