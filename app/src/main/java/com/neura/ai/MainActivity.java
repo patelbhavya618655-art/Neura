@@ -1,11 +1,11 @@
 package com.neura.ai;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -15,12 +15,28 @@ import android.webkit.WebViewClient;
 import android.webkit.WebSettings;
 import android.view.View;
 import android.widget.Toast;
+
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.ComponentActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 import androidx.webkit.WebViewAssetLoader;
+
+import com.android.billingclient.api.AcknowledgePurchaseParams;
+import com.android.billingclient.api.BillingClient;
+import com.android.billingclient.api.BillingClientStateListener;
+import com.android.billingclient.api.BillingFlowParams;
+import com.android.billingclient.api.BillingResult;
+import com.android.billingclient.api.ProductDetails;
+import com.android.billingclient.api.Purchase;
+import com.android.billingclient.api.PurchasesResponseListener;
+import com.android.billingclient.api.QueryProductDetailsParams;
+import com.android.billingclient.api.QueryPurchasesParams;
+
+import org.json.JSONObject;
+
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class MainActivity extends ComponentActivity {
@@ -29,6 +45,12 @@ public class MainActivity extends ComponentActivity {
     private static final int FILE_CHOOSER_REQUEST = 2001;
     private static final int MEDIA_PERMISSION_REQUEST = 2002;
     private PermissionRequest pendingWebPermission;
+
+    private BillingClient billingClient;
+    private boolean billingReady = false;
+    private String pendingProductId = null;
+
+    private static final String[] SUBS = {"neura_pro_monthly", "neura_pro_yearly"};
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,6 +71,8 @@ public class MainActivity extends ComponentActivity {
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+
+        webView.addJavascriptInterface(new BillingBridge(), "NEURA_BILLING");
 
         WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
                 .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this))
@@ -97,13 +121,135 @@ public class MainActivity extends ComponentActivity {
             }
         });
 
+        setupBilling();
         webView.loadUrl("https://appassets.androidplatform.net/assets/index.html");
+
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override public void handleOnBackPressed() {
                 if (webView.canGoBack()) webView.goBack(); else finish();
             }
         });
     }
+
+    /* ---------- Google Play Billing ---------- */
+
+    private void setupBilling() {
+        billingClient = BillingClient.newBuilder(this)
+                .setListener((BillingResult result, List<Purchase> purchases) -> {
+                    if (result.getResponseCode() == BillingClient.BillingResponseCode.OK && purchases != null) {
+                        for (Purchase p : purchases) handlePurchase(p);
+                    } else if (result.getResponseCode() == BillingClient.BillingResponseCode.USER_CANCELED) {
+                        sendToJs("{\"state\":\"error\",\"message\":\"Purchase cancel ho gaya.\"}");
+                    } else if (result.getResponseCode() != BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED) {
+                        sendToJs("{\"state\":\"error\",\"message\":\"" + escape(result.getDebugMessage()) + "\"}");
+                    }
+                })
+                .enablePendingPurchases()
+                .build();
+
+        billingClient.startConnection(new BillingClientStateListener() {
+            @Override public void onBillingSetupFinished(BillingResult result) {
+                billingReady = result.getResponseCode() == BillingClient.BillingResponseCode.OK;
+            }
+            @Override public void onBillingServiceDisconnected() { billingReady = false; }
+        });
+    }
+
+    private void handlePurchase(Purchase purchase) {
+        if (purchase.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
+            if (!purchase.isAcknowledged()) {
+                AcknowledgePurchaseParams params = AcknowledgePurchaseParams.newBuilder()
+                        .setPurchaseToken(purchase.getPurchaseToken()).build();
+                billingClient.acknowledgePurchase(params, r -> {});
+            }
+            String pid = purchase.getProducts().isEmpty() ? "" : purchase.getProducts().get(0);
+            sendToJs("{\"state\":\"purchased\",\"productId\":\"" + pid + "\"}");
+        } else if (purchase.getPurchaseState() == Purchase.PurchaseState.PENDING) {
+            sendToJs("{\"state\":\"pending\"}");
+        }
+    }
+
+    private void launchPurchase(final String productId) {
+        if (!billingReady) {
+            sendToJs("{\"state\":\"error\",\"message\":\"Google Play se connection nahi bana. Thodi der baad try karo.\"}");
+            return;
+        }
+        List<QueryProductDetailsParams.Product> list = new ArrayList<>();
+        list.add(QueryProductDetailsParams.Product.newBuilder()
+                .setProductId(productId)
+                .setProductType(BillingClient.ProductType.SUBS)
+                .build());
+        QueryProductDetailsParams params = QueryProductDetailsParams.newBuilder().setProductList(list).build();
+
+        billingClient.queryProductDetailsAsync(params, (BillingResult r, List<ProductDetails> details) -> {
+            if (r.getResponseCode() != BillingClient.BillingResponseCode.OK || details == null || details.isEmpty()) {
+                sendToJs("{\"state\":\"error\",\"message\":\"Plan Play Console mein nahi mila. Product ID check karo.\"}");
+                return;
+            }
+            ProductDetails pd = details.get(0);
+            BillingFlowParams.ProductDetailsParams.Builder pdp =
+                    BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(pd);
+            try {
+                if (pd.getSubscriptionOfferDetails() != null && !pd.getSubscriptionOfferDetails().isEmpty()) {
+                    pdp.setOfferToken(pd.getSubscriptionOfferDetails().get(0).getOfferToken());
+                }
+            } catch (Exception ignored) {}
+            BillingFlowParams flow = BillingFlowParams.newBuilder()
+                    .setProductDetailsParamsList(Collections.singletonList(pdp.build()))
+                    .build();
+            runOnUiThread(() -> billingClient.launchBillingFlow(MainActivity.this, flow));
+        });
+    }
+
+    private void restorePurchases() {
+        if (!billingReady) {
+            sendToJs("{\"state\":\"error\",\"message\":\"Google Play se connection nahi bana.\"}");
+            return;
+        }
+        billingClient.queryPurchasesAsync(
+                QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.SUBS).build(),
+                new PurchasesResponseListener() {
+                    @Override public void onQueryPurchasesResponse(BillingResult r, List<Purchase> purchases) {
+                        if (purchases != null) {
+                            for (Purchase p : purchases) {
+                                if (p.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
+                                    String pid = p.getProducts().isEmpty() ? "" : p.getProducts().get(0);
+                                    sendToJs("{\"state\":\"restored\",\"productId\":\"" + pid + "\"}");
+                                    return;
+                                }
+                            }
+                        }
+                        sendToJs("{\"state\":\"none\"}");
+                    }
+                });
+    }
+
+    private void sendToJs(final String json) {
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript("window.onBillingResult&&window.onBillingResult(" + JSONObject.quote(json) + ")", null);
+            }
+        });
+    }
+
+    private static String escape(String s) {
+        if (s == null) return "";
+        return s.replace("\\", " ").replace("\"", "'");
+    }
+
+    public class BillingBridge {
+        @JavascriptInterface
+        public void buy(String productId) {
+            pendingProductId = productId;
+            launchPurchase(productId);
+        }
+        @JavascriptInterface
+        public void restore() { restorePurchases(); }
+        @JavascriptInterface
+        public boolean available() { return true; }
+    }
+
+    /* ---------- lifecycle ---------- */
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -129,6 +275,7 @@ public class MainActivity extends ComponentActivity {
 
     @Override
     protected void onDestroy() {
+        if (billingClient != null) { try { billingClient.endConnection(); } catch (Exception ignored) {} }
         if (webView != null) { webView.destroy(); webView = null; }
         super.onDestroy();
     }
